@@ -1,0 +1,3 @@
+display_name: Git Commit Push
+short_description: Review diffs, plan commits, confirm messages, and push safely.
+default_prompt: Use $git-commit-push to inspect the current git worktree, propose commit groups with messages, ask for confirmation, then commit and push the current branch.
