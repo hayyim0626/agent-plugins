@@ -9,7 +9,6 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
 PLUGIN_HOME = SCRIPT_PATH.parent.parent
-PLUGIN_TYPES = ("root", "skill")
 
 
 def load_manifest(path: Path) -> dict[str, object]:
@@ -102,10 +101,19 @@ def install_path(source_path: Path, target_path: Path, mode: str, force: bool) -
 def install_root(args: argparse.Namespace) -> None:
     manifest_path, manifest = load_plugin('root')
     project_root = Path(args.project_root).expanduser().resolve()
-    source_path = (PLUGIN_HOME / as_string(manifest.get('source'), 'source', manifest_path)).resolve()
-    targets = as_string_list(manifest.get('targets'), 'targets', manifest_path)
-    for target in targets:
-        install_path(source_path, project_root / target, args.mode, args.force)
+    template_source = (PLUGIN_HOME / as_string(manifest.get('template_source'), 'template_source', manifest_path)).resolve()
+    local_target = project_root / as_string(manifest.get('local_target'), 'local_target', manifest_path)
+    link_targets = as_string_list(manifest.get('link_targets'), 'link_targets', manifest_path)
+
+    local_target.parent.mkdir(parents=True, exist_ok=True)
+    if not (local_target.exists() or local_target.is_symlink()):
+        shutil.copy2(template_source, local_target)
+        print(f"seeded {local_target} <- {template_source}")
+    else:
+        print(f"kept existing local root: {local_target}")
+
+    for target in link_targets:
+        install_path(local_target, project_root / target, 'symlink', args.force)
 
 
 def install_skill(args: argparse.Namespace) -> None:
@@ -155,9 +163,8 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser = subparsers.add_parser('install', help='Install a plugin')
     install_subparsers = install_parser.add_subparsers(dest='plugin_type', required=True)
 
-    root_parser = install_subparsers.add_parser('root', help='Install the shared root document')
+    root_parser = install_subparsers.add_parser('root', help='Seed project-local root.md and link AGENTS.md/.claude/CLAUDE.md to it')
     root_parser.add_argument('project_root')
-    root_parser.add_argument('--mode', choices=('symlink', 'copy'), default='symlink')
     root_parser.add_argument('--force', action='store_true')
     root_parser.set_defaults(func=install_root)
 

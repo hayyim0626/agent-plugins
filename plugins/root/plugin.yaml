@@ -1,9 +1,10 @@
 {
   "name": "root",
   "type": "root",
-  "description": "Symlink AGENTS.md and .claude/CLAUDE.md to the shared roots/root.md.",
-  "source": "roots/root.md",
-  "targets": [
+  "description": "Create project-local root.md from the shared template and symlink AGENTS.md/.claude/CLAUDE.md to it.",
+  "template_source": "roots/root.md",
+  "local_target": "root.md",
+  "link_targets": [
     "AGENTS.md",
     ".claude/CLAUDE.md"
   ]
