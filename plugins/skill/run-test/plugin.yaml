@@ -1,0 +1,9 @@
+{
+  "name": "run-test",
+  "type": "skill",
+  "description": "Install the shared run-test skill.",
+  "source": "skills/run-test",
+  "targets": {
+    "project": ".claude/skills/run-test"
+  }
+}

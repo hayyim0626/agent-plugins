@@ -1,4 +1,10 @@
-name: root
-type: root-template
-description: Generate AGENTS.md and .claude/CLAUDE.md from roots/root.md.
-source: roots/root.md
+{
+  "name": "root",
+  "type": "root",
+  "description": "Symlink AGENTS.md and .claude/CLAUDE.md to the shared roots/root.md.",
+  "source": "roots/root.md",
+  "targets": [
+    "AGENTS.md",
+    ".claude/CLAUDE.md"
+  ]
+}

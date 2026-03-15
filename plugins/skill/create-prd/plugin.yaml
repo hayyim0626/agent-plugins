@@ -1,0 +1,9 @@
+{
+  "name": "create-prd",
+  "type": "skill",
+  "description": "Install the shared create-prd skill.",
+  "source": "skills/create-prd",
+  "targets": {
+    "project": ".claude/skills/create-prd.md"
+  }
+}

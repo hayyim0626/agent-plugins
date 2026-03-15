@@ -1,5 +1,0 @@
-name: git-commit-push
-type: codex-skill
-description: Install the shared git-commit-push Codex skill.
-source: skills/git-commit-push
-target: ~/.codex/skills/git-commit-push

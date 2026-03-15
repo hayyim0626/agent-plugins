@@ -2,136 +2,172 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
-import re
 import shutil
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
 PLUGIN_HOME = SCRIPT_PATH.parent.parent
-SECTION_RE = re.compile(r"<!--\s*(SHARED|AGENTS|CLAUDE):START\s*-->(.*?)<!--\s*\1:END\s*-->", re.DOTALL)
+PLUGIN_TYPES = ("root", "skill")
 
 
-def parse_manifest(path: Path) -> dict[str, str]:
-    data: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        key, sep, value = line.partition(":")
-        if not sep:
-            raise SystemExit(f"invalid manifest line in {path}: {raw_line}")
-        data[key.strip()] = value.strip()
+def load_manifest(path: Path) -> dict[str, object]:
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise SystemExit(f"manifest must decode to an object: {path}")
     return data
 
 
-def render_sections(root_text: str) -> dict[str, str]:
-    sections = {match.group(1): match.group(2).strip() for match in SECTION_RE.finditer(root_text)}
-    required = {"SHARED", "AGENTS", "CLAUDE"}
-    missing = required - sections.keys()
-    if missing:
-        raise SystemExit("root.md is missing sections: " + ", ".join(sorted(missing)))
-    return sections
+def as_string(value: object, field_name: str, manifest_path: Path) -> str:
+    if not isinstance(value, str) or not value:
+        raise SystemExit(f"{manifest_path}: {field_name!r} must be a non-empty string")
+    return value
 
 
-def replace_placeholders(text: str, project_name: str, project_root: Path) -> str:
-    return text.replace("{{PROJECT_NAME}}", project_name).replace("{{PROJECT_ROOT}}", str(project_root))
+def as_string_list(value: object, field_name: str, manifest_path: Path) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise SystemExit(f"{manifest_path}: {field_name!r} must be a list of non-empty strings")
+    return list(value)
 
 
-def replace_file(path: Path, content: str, force: bool) -> None:
-    if path.exists() or path.is_symlink():
-        if not force:
-            raise SystemExit(f"refusing to overwrite existing path without --force: {path}")
-        if path.is_dir() and not path.is_symlink():
-            raise SystemExit(f"refusing to replace directory: {path}")
+def as_string_map(value: object, field_name: str, manifest_path: Path) -> dict[str, str]:
+    if not isinstance(value, dict) or not value:
+        raise SystemExit(f"{manifest_path}: {field_name!r} must be an object")
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key or not isinstance(item, str) or not item:
+            raise SystemExit(f"{manifest_path}: {field_name!r} must map strings to strings")
+        result[key] = item
+    return result
+
+
+def manifest_path_for(plugin_type: str, name: str | None = None) -> Path:
+    if plugin_type == 'root':
+        return PLUGIN_HOME / 'plugins' / 'root' / 'plugin.yaml'
+    if plugin_type == 'skill' and name is not None:
+        return PLUGIN_HOME / 'plugins' / 'skill' / name / 'plugin.yaml'
+    raise SystemExit(f'invalid plugin lookup: {plugin_type} {name}')
+
+
+def load_plugin(plugin_type: str, name: str | None = None) -> tuple[Path, dict[str, object]]:
+    manifest_path = manifest_path_for(plugin_type, name)
+    if not manifest_path.exists():
+        label = plugin_type if name is None else f"{plugin_type}:{name}"
+        raise SystemExit(f"unknown plugin: {label}")
+    return manifest_path, load_manifest(manifest_path)
+
+
+def is_same_symlink(target_path: Path, source_path: Path) -> bool:
+    if not target_path.is_symlink():
+        return False
+    try:
+        return target_path.resolve() == source_path.resolve()
+    except OSError:
+        return False
+
+
+def remove_existing_path(path: Path, force: bool) -> None:
+    if not (path.exists() or path.is_symlink()):
+        return
+    if not force:
+        raise SystemExit(f"refusing to replace existing path without --force: {path}")
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
         path.unlink()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content.rstrip() + "\n", encoding="utf-8")
+
+
+def install_path(source_path: Path, target_path: Path, mode: str, force: bool) -> None:
+    if mode == 'symlink' and is_same_symlink(target_path, source_path):
+        print(f"already linked: {target_path}")
+        return
+
+    remove_existing_path(target_path, force)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if mode == 'symlink':
+        target_path.symlink_to(source_path, target_is_directory=source_path.is_dir())
+        print(f"symlinked {target_path} -> {source_path}")
+        return
+
+    if source_path.is_dir():
+        shutil.copytree(source_path, target_path)
+    else:
+        shutil.copy2(source_path, target_path)
+    print(f"copied {target_path} <- {source_path}")
 
 
 def install_root(args: argparse.Namespace) -> None:
-    manifest = parse_manifest(PLUGIN_HOME / "plugins" / "root" / "plugin.yaml")
+    manifest_path, manifest = load_plugin('root')
     project_root = Path(args.project_root).expanduser().resolve()
-    project_name = args.project_name or project_root.name
-    source_path = PLUGIN_HOME / manifest["source"]
-    sections = render_sections(source_path.read_text(encoding="utf-8"))
-
-    agents_body = replace_placeholders(sections["SHARED"] + "\n\n" + sections["AGENTS"], project_name, project_root)
-    claude_body = replace_placeholders(sections["SHARED"] + "\n\n" + sections["CLAUDE"], project_name, project_root)
-
-    agents_doc = (
-        "# AGENTS.md\n\n"
-        "`agent-plugin`으로 생성된 파일입니다. 장기 수정은 `agent-plugins/roots/root.md`에서 관리하세요.\n\n"
-        + agents_body
-    )
-    claude_doc = (
-        "# CLAUDE.md\n\n"
-        "`agent-plugin`으로 생성된 파일입니다. 장기 수정은 `agent-plugins/roots/root.md`에서 관리하세요.\n\n"
-        + claude_body
-    )
-
-    replace_file(project_root / "AGENTS.md", agents_doc, args.force)
-    replace_file(project_root / ".claude" / "CLAUDE.md", claude_doc, args.force)
-
-    skills_path = project_root / ".claude" / "SKILLS.md"
-    if skills_path.is_symlink():
-        skills_path.unlink()
-
-    print(f"generated AGENTS.md and .claude/CLAUDE.md in {project_root}")
+    source_path = (PLUGIN_HOME / as_string(manifest.get('source'), 'source', manifest_path)).resolve()
+    targets = as_string_list(manifest.get('targets'), 'targets', manifest_path)
+    for target in targets:
+        install_path(source_path, project_root / target, args.mode, args.force)
 
 
-def install_codex_skill(args: argparse.Namespace) -> None:
-    manifest_path = PLUGIN_HOME / "plugins" / "codex-skill" / args.skill_name / "plugin.yaml"
-    if not manifest_path.exists():
-        raise SystemExit(f"unknown codex skill plugin: {args.skill_name}")
-    manifest = parse_manifest(manifest_path)
-    source_path = (PLUGIN_HOME / manifest["source"]).resolve()
-    target_path = Path(os.path.expanduser(manifest["target"]))
-    target_path.parent.mkdir(parents=True, exist_ok=True)
+def install_skill(args: argparse.Namespace) -> None:
+    manifest_path, manifest = load_plugin('skill', args.skill_name)
+    source_path = (PLUGIN_HOME / as_string(manifest.get('source'), 'source', manifest_path)).resolve()
+    targets = as_string_map(manifest.get('targets'), 'targets', manifest_path)
 
-    if target_path.exists() or target_path.is_symlink():
-        if target_path.is_dir() and not target_path.is_symlink():
-            shutil.rmtree(target_path)
-        else:
-            target_path.unlink()
+    target_name = args.target
+    if target_name is None:
+        if len(targets) != 1:
+            available = ', '.join(sorted(targets))
+            raise SystemExit(f"select one target with --target. available: {available}")
+        target_name = next(iter(targets))
 
-    if args.mode == "copy":
-        shutil.copytree(source_path, target_path)
-        print(f"copied {args.skill_name} -> {target_path}")
-        return
+    if target_name not in targets:
+        available = ', '.join(sorted(targets))
+        raise SystemExit(f"unknown target {target_name!r}. available: {available}")
 
-    target_path.symlink_to(source_path, target_is_directory=True)
-    print(f"symlinked {args.skill_name} -> {target_path}")
+    raw_target = targets[target_name]
+    if raw_target.startswith('~/'):
+        target_path = Path(os.path.expanduser(raw_target))
+    else:
+        if not args.project_root:
+            raise SystemExit('project-scoped skill installs require --project-root')
+        target_path = Path(args.project_root).expanduser().resolve() / raw_target
+
+    install_path(source_path, target_path, args.mode, args.force)
 
 
 def list_plugins(_: argparse.Namespace) -> None:
-    root_manifest = parse_manifest(PLUGIN_HOME / "plugins" / "root" / "plugin.yaml")
-    print(f"root\t{root_manifest['description']}")
-    for manifest_path in sorted((PLUGIN_HOME / "plugins" / "codex-skill").glob("*/plugin.yaml")):
-        manifest = parse_manifest(manifest_path)
-        print(f"codex-skill:{manifest['name']}\t{manifest['description']}")
+    manifest_path, manifest = load_plugin('root')
+    print(f"root\t{as_string(manifest.get('description'), 'description', manifest_path)}")
+    for manifest_path in sorted((PLUGIN_HOME / 'plugins' / 'skill').glob('*/plugin.yaml')):
+        manifest = load_manifest(manifest_path)
+        name = as_string(manifest.get('name'), 'name', manifest_path)
+        description = as_string(manifest.get('description'), 'description', manifest_path)
+        print(f"skill:{name}\t{description}")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-plugin")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(prog='agent-plugin')
+    subparsers = parser.add_subparsers(dest='command', required=True)
 
-    list_parser = subparsers.add_parser("list", help="List available plugins")
+    list_parser = subparsers.add_parser('list', help='List available plugins')
     list_parser.set_defaults(func=list_plugins)
 
-    install_parser = subparsers.add_parser("install", help="Install a plugin")
-    install_subparsers = install_parser.add_subparsers(dest="plugin_type", required=True)
+    install_parser = subparsers.add_parser('install', help='Install a plugin')
+    install_subparsers = install_parser.add_subparsers(dest='plugin_type', required=True)
 
-    root_parser = install_subparsers.add_parser("root", help="Generate AGENTS.md and .claude/CLAUDE.md")
-    root_parser.add_argument("project_root")
-    root_parser.add_argument("--project-name")
-    root_parser.add_argument("--force", action="store_true")
+    root_parser = install_subparsers.add_parser('root', help='Install the shared root document')
+    root_parser.add_argument('project_root')
+    root_parser.add_argument('--mode', choices=('symlink', 'copy'), default='symlink')
+    root_parser.add_argument('--force', action='store_true')
     root_parser.set_defaults(func=install_root)
 
-    skill_parser = install_subparsers.add_parser("codex-skill", help="Install a Codex skill plugin")
-    skill_parser.add_argument("skill_name")
-    skill_parser.add_argument("--mode", choices=("symlink", "copy"), default="symlink")
-    skill_parser.set_defaults(func=install_codex_skill)
+    skill_parser = install_subparsers.add_parser('skill', help='Install a shared skill')
+    skill_parser.add_argument('skill_name')
+    skill_parser.add_argument('--target')
+    skill_parser.add_argument('--project-root')
+    skill_parser.add_argument('--mode', choices=('symlink', 'copy'), default='symlink')
+    skill_parser.add_argument('--force', action='store_true')
+    skill_parser.set_defaults(func=install_skill)
 
     return parser
 
@@ -143,5 +179,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())

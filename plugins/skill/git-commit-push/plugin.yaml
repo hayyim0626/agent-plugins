@@ -1,0 +1,9 @@
+{
+  "name": "git-commit-push",
+  "type": "skill",
+  "description": "Install the shared git-commit-push skill.",
+  "source": "skills/git-commit-push",
+  "targets": {
+    "user": "~/.codex/skills/git-commit-push"
+  }
+}

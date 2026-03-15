@@ -1,0 +1,9 @@
+{
+  "name": "write-test",
+  "type": "skill",
+  "description": "Install the shared write-test skill.",
+  "source": "skills/write-test",
+  "targets": {
+    "project": ".claude/skills/write-test"
+  }
+}
