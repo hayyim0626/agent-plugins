@@ -1,0 +1,4 @@
+name: root
+type: root-template
+description: Generate AGENTS.md and .claude/CLAUDE.md from roots/root.md.
+source: roots/root.md
